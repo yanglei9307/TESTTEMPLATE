@@ -1,0 +1,123 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        jcenter()
+        maven { url "https://repo.spring.io/libs-milestone" }
+        maven { url "https://repo.spring.io/libs-snapshot" }
+        maven { url "https://plugins.gradle.org/m2/" }
+    }
+    dependencies {
+        classpath "de.undercouch:gradle-download-task:${project.gradleDownloadTaskVersion}"
+        classpath "org.springframework.boot:spring-boot-gradle-plugin:${project.springBootVersion}"
+        classpath "gradle.plugin.com.google.cloud.tools:jib-gradle-plugin:${project.jibVersion}"
+        classpath "io.freefair.gradle:maven-plugin:${project.gradleMavenPluginVersion}"
+    }
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    jcenter()
+    maven { url "https://oss.sonatype.org/content/repositories/snapshots" }
+    maven { url "https://oss.sonatype.org/content/repositories/releases" }
+    maven { url "https://build.shibboleth.net/nexus/content/repositories/releases/" }
+    maven { url "https://repo.spring.io/milestone/" }
+    maven { url "https://repo.spring.io/snapshot/" }
+    maven { url "https://repo.spring.io/libs-release/" }
+    maven { url "https://oss.jfrog.org/artifactory/oss-snapshot-local" }
+    maven { url "https://dl.bintray.com/uniconiam/maven" }
+    maven { url "https://maven.repository.redhat.com/ga/" }
+    maven { url "https://jitpack.io" }    
+}
+
+def casServerVersion = project.'cas.version'
+def casWebApplicationBinaryName = "cas.war"
+
+project.ext."casServerVersion" = casServerVersion
+project.ext."casWebApplicationBinaryName" = casWebApplicationBinaryName
+
+apply plugin: "io.freefair.war-overlay"
+apply from: rootProject.file("gradle/tasks.gradle")
+
+apply plugin: "war"
+apply plugin: "eclipse"
+apply plugin: "idea"
+
+apply from: rootProject.file("gradle/springboot.gradle")
+apply from: rootProject.file("gradle/dockerjib.gradle")
+apply from: rootProject.file("gradle/cassupport.gradle")
+
+dependencies {
+    def buildAll = project.hasProperty("buildAll") && Boolean.valueOf(project.getProperty("buildAll"))
+    if (buildAll) {
+        compile libraries.cassupport
+    }
+}
+
+tasks.findByName("jibDockerBuild")
+    .dependsOn(copyWebAppIntoJib, copyConfigIntoJib)
+    .finalizedBy(deleteWebAppFromJib)
+
+tasks.findByName("jib")
+    .dependsOn(copyWebAppIntoJib, copyConfigIntoJib)
+    .finalizedBy(deleteWebAppFromJib)
+
+// temporary exclusions for jars finding there way into cas.war
+// transitive dependencies should be tracked down and appropriate exclusions added
+configurations {
+    runtime.exclude group: 'ch.qos.logback'
+    runtime.exclude module: 'ehcache-core'
+    compile.exclude group: 'ch.qos.logback'
+    compile.exclude module: 'ehcache-core'
+}
+
+
+configurations.all {
+    resolutionStrategy {
+        cacheChangingModulesFor 0, "seconds"
+        cacheDynamicVersionsFor 0, "seconds"
+
+        preferProjectModules()
+
+        def failIfConflict = project.hasProperty("failOnVersionConflict") && Boolean.valueOf(project.getProperty("failOnVersionConflict"))
+        if (failIfConflict) {
+            failOnVersionConflict()
+        }
+    }
+}
+
+eclipse {
+    classpath {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
+
+idea {
+    module {
+        downloadJavadoc = true
+        downloadSources = true
+    }
+}
+
+bootWar {
+    entryCompression = ZipEntryCompression.STORED
+    overlays {
+        // https://docs.freefair.io/gradle-plugins/current/reference/#_io_freefair_war_overlay
+        // Note: The "excludes" property is only for files in the war dependency.
+        // If a jar is excluded from the war, it could be brought back into the final war as a dependency
+        // of non-war dependencies. Those should be excluded via normal gradle dependency exclusions.
+        cas {
+            from "org.apereo.cas:cas-server-webapp${project.appServer}:${casServerVersion}@war"
+            provided = false
+            //excludes = ["WEB-INF/lib/somejar-1.0*"]
+        }
+    }
+}
+
+
+wrapper {
+    distributionType = Wrapper.DistributionType.BIN
+    gradleVersion = "${project.gradleVersion}"
+}
